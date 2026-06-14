@@ -1,0 +1,6 @@
+{
+  "name": "On Air Eats",
+  "description": "내 주변이나 검색한 주소 주변의 TV 방송(3대천왕, 수요미식회, 또간집 등) 출연 맛집을 지도상에서 찾아주는 서비스입니다.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
