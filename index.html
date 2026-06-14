@@ -444,6 +444,11 @@
     </div>
   </div>
 
+  <script type="module">
+    import { TV_RESTAURANTS_DB } from "./src/restaurantsData.ts";
+    window.TV_RESTAURANTS_DB = TV_RESTAURANTS_DB;
+  </script>
+
   <!-- Client-side Logic Script -->
   <script>
     // --- Global Application State ---
@@ -612,6 +617,105 @@
       lucide.createIcons();
     }
 
+    // --- Client-side direct fetch to Google Gemini API for serverless static deployment ---
+    async function searchRestaurantsWithGeminiClientSide(lat, lng, locationName, apiKey) {
+      if (!apiKey) return [];
+
+      const prompt = `You are an expert culinary guide specializing in South Korea's TV-featured and famous media-featured restaurants (e.g. 유명 방송 맛집 from shows/creators like 풍자 또간집, 백종원의 3대천왕, 전현무계획, 쯔양, 남겨서뭐하니, 성시경의 먹을텐데, 생활의 달인, 흑백요리사, 수요미식회, 식객 허영만의 백반기행, 맛있는 녀석들, 줄 서는 식당, 생생정보통, 놀라운 토요일, 최자로드, 유 퀴즈 온 더 블럭, 전지적 참견 시점, 백종원의 골목식당, 신상출시 편스토랑, 토요일은 밥이 좋아, 오늘 뭐 먹지?, 어쩌다 사장, 한국인의 밥상, 한끼줍쇼, 밥블레스유, 테이스티 로드, 홍석천 이원일, VJ특공대, 김사원세끼, 김영철의 동네 한 바퀴, 식신로드, 나 혼자 산다).
+
+Find real, officially featured restaurants in Korea that correspond to the following search profile:
+- Search Center point: ${locationName}
+- Coordinates: Latitude ${lat}, Longitude ${lng}
+- Distance constraint: Strictly within a 2.0 km radius of this center coordinate.
+
+Strict Rules of Integrity:
+1. Search thoroughly across ALL SEASONS and year ranges of the TV shows listed above (e.g. '전현무계획 시즌1', '전현무계획 시즌2', '줄 서는 식당 2', '식신로드 시즌1/시즌2/시즌3/시즌4', '테이스티 로드 전 시즌', '어쩌다 사장 1/2/3', '밥블레스유 2020', '맛있는 녀석들' different eras, etc.).
+2. Return ONLY real, verifiable restaurants that actually exist and have been featured on Korean culinary TV programs or Creator channels.
+3. DO NOT fabricate or simulate any fake names, addresses, or phone numbers.
+4. DO NOT change/shift addresses of existing restaurants to make them fit near the target coordinates. If there are no such restaurants within 2.0 km, return an empty array [].
+5. Remove any speculative or inaccurate ratings or reviews, keep information highly precise. If telephone is inaccurate or not 100% known, represent as empty string "".
+6. Calculate the coordinates accurately so they reside exactly at that actual restaurant's real geolocation, and check that the distance to [${lat}, ${lng}] is indeed <= 2.0 km.
+
+The result must be a JSON array. Each object in the array must strictly match this schema:
+- id: A unique string starting with "gemini_" (e.g. "gemini_mapo_sundae_19")
+- name: The name of the restaurant (Korean)
+- category: Type of food (e.g. "한식", "중식", "우동/돈까스", "일식", "양식")
+- tvShow: The main TV show it appeared on WITH specific season suffix where applicable (e.g. "전현무계획 시즌2", "줄 서는 식당 2", "식신로드 시즌3", "성시경의 먹을텐데", "생활의 달인")
+- tvEpisode: Extra info like winning place or episode name (e.g. "마포구편 1위", "해장국 편", "5회 방영")
+- menu: Major dishes and prices (Korean, e.g. "얼큰순대국(9,000원)")
+- address: Real Korean road-name address (e.g. "서울 마포구 망원로 22")
+- latitude: Double (latitude coordinate)
+- longitude: Double (longitude coordinate)
+- description: Brief delicious summary (Korean, 2-3 sentences)
+- tel: Phone number if accurate (optional/nullable, e.g. "02-123-4567"), or empty string if not 100% accurate.
+- rating: Double (between 1.0 and 5.0, representing real user sentiment)
+- featuredReason: Korean summary of why it's famous.`;
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{ text: prompt }]
+          }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  id: { type: "STRING" },
+                  name: { type: "STRING" },
+                  category: { type: "STRING" },
+                  tvShow: { type: "STRING" },
+                  tvEpisode: { type: "STRING" },
+                  menu: { type: "STRING" },
+                  address: { type: "STRING" },
+                  latitude: { type: "NUMBER" },
+                  longitude: { type: "NUMBER" },
+                  description: { type: "STRING" },
+                  tel: { type: "STRING" },
+                  rating: { type: "NUMBER" },
+                  featuredReason: { type: "STRING" }
+                },
+                required: [
+                  "id", "name", "category", "tvShow", "menu", "address", "latitude", "longitude", "description", "rating", "featuredReason"
+                ]
+              }
+            }
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMsg = errorData?.error?.message || response.statusText;
+        throw new Error(`Gemini API Error: ${errorMsg}`);
+      }
+
+      const data = await response.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) return [];
+
+      let cleanText = text.trim();
+      if (cleanText.startsWith("```")) {
+        cleanText = cleanText.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+      }
+
+      const parsed = JSON.parse(cleanText);
+      if (Array.isArray(parsed)) {
+        return parsed.filter(item => {
+          const dist = getDistance(lat, lng, item.latitude, item.longitude);
+          return dist <= 2.0;
+        });
+      }
+      return [];
+    }
+
     // --- Fetch core restaurants on coordinates or address text ---
     async function fetchServerRestaurants(payload) {
       document.getElementById("loading-overlay").style.display = "flex";
@@ -629,7 +733,8 @@
       } else if (payload.query) {
         statusText.textContent = `'${payload.query}' 부근의 방송 음식점 (보정 후 2km 반경 수록) 로딩 중...`;
       }
-
+      
+      let data = null;
       try {
         const response = await fetch("/api/restaurants", {
           method: "POST",
@@ -638,11 +743,84 @@
         });
 
         if (!response.ok) {
-          throw new Error("서버와의 원격 통신에 누락이 발생했습니다.");
+          throw new Error("서버 응답 비정상 (Static Fallback 실행)");
+        }
+        data = await response.json();
+      } catch (err) {
+        console.warn("Express backend server unavailable or returned an error. Switching to full client-side static sandbox mode:", err);
+        
+        // 1. Geocode client-side if query is provided but coordinates are missing
+        let targetLat = payload.latitude ? parseFloat(payload.latitude) : null;
+        let targetLng = payload.longitude ? parseFloat(payload.longitude) : null;
+        let locationName = payload.query || "현재 지정한 중심 위치 주변";
+
+        if (payload.query && (!targetLat || !targetLng)) {
+          try {
+            const enc = encodeURIComponent(payload.query.trim());
+            const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${enc}&format=json&limit=1&accept-language=ko&countrycodes=kr`);
+            const geoData = await geoRes.json();
+            if (geoData && geoData.length > 0) {
+              targetLat = parseFloat(geoData[0].lat);
+              targetLng = parseFloat(geoData[0].lon);
+              const displayNameParts = geoData[0].display_name.split(",");
+              locationName = displayNameParts.reverse().slice(1).join(" ").trim() || payload.query;
+              console.log(`[Client Fallback] Geocoded '${payload.query}' -> ${targetLat}, ${targetLng} (${locationName})`);
+            }
+          } catch (geoErr) {
+            console.error("[Client Fallback] Geocoding failure:", geoErr);
+          }
         }
 
-        const data = await response.json();
-        
+        if (!targetLat || !targetLng) {
+          targetLat = 37.5562;
+          targetLng = 126.9015;
+          locationName = "서울 마포구 망원동";
+        }
+
+        // 2. Filter local restaurants within 2.0 km from preloaded database
+        const db = window.TV_RESTAURANTS_DB || [];
+        const localList = db.filter(r => getDistance(targetLat, targetLng, r.latitude, r.longitude) <= 2.0);
+        let list = [...localList];
+
+        // 3. Optional client-side Gemini AI search if key is provided
+        let geminiError = null;
+        let isGeminiActive = false;
+        if (payload.geminiApiKey) {
+          isGeminiActive = true;
+          try {
+            const geminiFound = await searchRestaurantsWithGeminiClientSide(targetLat, targetLng, locationName, payload.geminiApiKey);
+            if (geminiFound && geminiFound.length > 0) {
+              const localNames = new Set(localList.map(r => r.name.replace(/\s+/g, "")));
+              const uniqueGemini = geminiFound.filter(r => {
+                const cleanGemName = r.name.replace(/\s+/g, "");
+                return !localNames.has(cleanGemName);
+              });
+
+              uniqueGemini.forEach(r => {
+                r.isGemini = true;
+              });
+
+              list = [...list, ...uniqueGemini];
+              console.log(`[Client Fallback] Merged ${uniqueGemini.length} unique Gemini restaurants.`);
+            }
+          } catch (gemErr) {
+            console.warn("[Client Fallback] Gemini call issue:", gemErr);
+            geminiError = gemErr.message || String(gemErr);
+          }
+        }
+
+        data = {
+          status: "ok",
+          locationName: locationName,
+          centerLat: targetLat,
+          centerLng: targetLng,
+          restaurants: list,
+          isGeminiActive: isGeminiActive,
+          geminiError: geminiError
+        };
+      }
+
+      try {
         allFetchedRestaurants = data.restaurants || [];
         centerLat = parseFloat(data.centerLat);
         centerLng = parseFloat(data.centerLng);
@@ -659,10 +837,10 @@
         if (appMapInstance) {
           appMapInstance.setView([centerLat, centerLng], 14);
         }
-
+ 
         // Auto select first restaurant ID
         selectedRestaurantId = (allFetchedRestaurants.length > 0) ? allFetchedRestaurants[0].id : null;
-
+ 
         // Render UI
         rebuildFilterCheckboxes();
         renderRestaurantList();
