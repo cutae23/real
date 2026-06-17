@@ -138,6 +138,21 @@
           </div>
         </div>
 
+        <!-- Favorite food style input -->
+        <div class="relative w-36 sm:w-44 shrink-0">
+          <div class="absolute inset-y-0 left-2.5 flex items-center pointer-events-none text-rose-500">
+            <i data-lucide="heart" class="w-3.5 h-3.5 fill-rose-500"></i>
+          </div>
+          <input
+            id="style-preference-input"
+            type="text"
+            placeholder="내 최애 스타일 (선택)"
+            title="좋아하는 맛, 분위기, 방송 스타일을 입력하시면 AI가 맞춤형 검색 결과를 출력합니다."
+            class="w-full pl-8 pr-2.5 py-2.5 rounded-xl border border-rose-100 bg-rose-50/20 focus:bg-white focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 text-xs transition-all font-semibold text-slate-800"
+            autocomplete="off"
+          />
+        </div>
+
         <button
           id="query-search-button"
           type="button"
@@ -296,6 +311,25 @@
         <!-- Restaurant Cards Feed container -->
         <div id="cards-container" class="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50/20 font-sans">
           
+          <!-- Search History Section -->
+          <div id="search-history-panel" class="mb-3 p-3 bg-white border border-slate-100 rounded-xl space-y-2" style="display: none;">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider flex items-center gap-1 leading-none">
+                <i data-lucide="history" class="w-3.5 h-3.5 text-rose-500 animate-pulse"></i> 최근 방문 탐색 지역 기록
+              </span>
+              <button 
+                onclick="window.clearSearchHistory()" 
+                type="button" 
+                class="text-[9px] hover:text-rose-600 font-extrabold text-slate-400 cursor-pointer bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100 transition-colors"
+              >
+                전체 비우기
+              </button>
+            </div>
+            <div id="search-history-pills" class="flex flex-wrap gap-1 max-h-24 overflow-y-auto p-0.5">
+              <!-- Dynamically populated tags with inline deletion 'x' -->
+            </div>
+          </div>
+          
           <!-- Query Error banner -->
           <div id="error-banner" style="display: none;" class="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs text-center space-y-1">
             <i data-lucide="alert-circle" class="w-5 h-5 mx-auto text-amber-500"></i>
@@ -445,7 +479,7 @@
   </div>
 
   <script type="module">
-    import { TV_RESTAURANTS_DB } from "./src/restaurantsData.ts";
+    import { TV_RESTAURANTS_DB } from "./src/restaurantsData.js";
     window.TV_RESTAURANTS_DB = TV_RESTAURANTS_DB;
   </script>
 
@@ -457,6 +491,155 @@
       tvShow: "All",
       category: "All",
       sortBy: "distance"
+    };
+
+    // --- Local Storage Storage Helpers ---
+    function getAccumulatedRestaurants() {
+      try {
+        const raw = localStorage.getItem("TV_RESTAURANTS_ACCUMULATED");
+        return raw ? JSON.parse(raw) : [];
+      } catch (e) {
+        console.error("Failed to parse accumulated restaurants", e);
+        return [];
+      }
+    }
+
+    function saveAccumulatedRestaurants(list) {
+      try {
+        localStorage.setItem("TV_RESTAURANTS_ACCUMULATED", JSON.stringify(list));
+      } catch (e) {
+        console.error("Failed to save accumulated restaurants", e);
+      }
+    }
+
+    function getDeletedRestaurantIds() {
+      try {
+        const raw = localStorage.getItem("TV_RESTAURANTS_DELETED");
+        return raw ? new Set(JSON.parse(raw)) : new Set();
+      } catch (e) {
+        console.error("Failed to parse deleted restaurant ids", e);
+        return new Set();
+      }
+    }
+
+    function saveDeletedRestaurantIds(set) {
+      try {
+        localStorage.setItem("TV_RESTAURANTS_DELETED", JSON.stringify([...set]));
+      } catch (e) {
+        console.error("Failed to save deleted restaurant ids", e);
+      }
+    }
+
+    // --- Search History Helpers ---
+    function getSearchHistory() {
+      try {
+        const raw = localStorage.getItem("TV_RESTAURANTS_SEARCH_HISTORY");
+        return raw ? JSON.parse(raw) : [];
+      } catch (e) {
+        console.error("Failed to parse search history", e);
+        return [];
+      }
+    }
+
+    function saveSearchHistory(history) {
+      try {
+        localStorage.setItem("TV_RESTAURANTS_SEARCH_HISTORY", JSON.stringify(history));
+      } catch (e) {
+        console.error("Failed to save search history", e);
+      }
+    }
+
+    window.addSearchHistory = function(name, lat, lng) {
+      if (!name || isNaN(lat) || isNaN(lng)) return;
+      const cleanName = name.replace(/South Korea/gi, "").replace(/대한민국/gi, "").trim();
+      if (!cleanName || cleanName === "현재 맛집" || cleanName === "서울 맛집") return;
+
+      let history = getSearchHistory();
+      history = history.filter(item => {
+        const matchName = item.name.toLowerCase() === cleanName.toLowerCase();
+        const matchCoords = Math.abs(item.lat - lat) < 0.001 && Math.abs(item.lng - lng) < 0.001;
+        return !matchName && !matchCoords;
+      });
+
+      history.unshift({ name: cleanName, lat, lng });
+
+      if (history.length > 15) {
+        history = history.slice(0, 15);
+      }
+
+      saveSearchHistory(history);
+      window.renderSearchHistory();
+    };
+
+    window.deleteSearchHistoryEntry = function(index, event) {
+      if (event) event.stopPropagation();
+      const history = getSearchHistory();
+      history.splice(index, 1);
+      saveSearchHistory(history);
+      window.renderSearchHistory();
+    };
+
+    window.clearSearchHistory = function() {
+      if (!confirm("모든 최근 검색 기록을 삭제하시겠습니까?")) return;
+      saveSearchHistory([]);
+      window.renderSearchHistory();
+    };
+
+    window.renderSearchHistory = function() {
+      const history = getSearchHistory();
+      const panel = document.getElementById("search-history-panel");
+      const pillsContainer = document.getElementById("search-history-pills");
+      
+      if (!panel || !pillsContainer) return;
+
+      if (history.length === 0) {
+        panel.style.display = "none";
+        return;
+      }
+
+      panel.style.display = "block";
+      pillsContainer.innerHTML = "";
+
+      history.forEach((item, idx) => {
+        const pill = document.createElement("div");
+        pill.className = "flex items-center gap-1 bg-slate-50 hover:bg-rose-50 text-slate-700 hover:text-rose-700 text-[10px] font-semibold px-2 py-1 rounded-lg border border-slate-200 hover:border-rose-200 transition-all cursor-pointer shadow-3xs";
+        
+        pill.addEventListener("click", () => {
+          const searchInput = document.getElementById("address-search-input");
+          if (searchInput) {
+            searchInput.value = item.name;
+          }
+          fetchServerRestaurants({
+            latitude: item.lat,
+            longitude: item.lng,
+            query: item.name
+          });
+        });
+
+        const textSpan = document.createElement("span");
+        textSpan.className = "truncate max-w-[120px]";
+        textSpan.textContent = item.name;
+        pill.appendChild(textSpan);
+
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "text-slate-450 hover:text-rose-600 font-extrabold focus:outline-none flex items-center justify-center p-0.5 rounded hover:bg-slate-200/40 cursor-pointer";
+        delBtn.innerHTML = `
+          <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        `;
+        delBtn.addEventListener("click", (e) => {
+          window.deleteSearchHistoryEntry(idx, e);
+        });
+
+        pill.appendChild(delBtn);
+        pillsContainer.appendChild(pill);
+      });
+      
+      if (window.lucide) {
+        window.lucide.createIcons();
+      }
     };
 
     let centerLat = 37.5562;
@@ -618,7 +801,7 @@
     }
 
     // --- Client-side direct fetch to Google Gemini API for serverless static deployment ---
-    async function searchRestaurantsWithGeminiClientSide(lat, lng, locationName, apiKey) {
+    async function searchRestaurantsWithGeminiClientSide(lat, lng, locationName, apiKey, favoriteStyle) {
       if (!apiKey) return [];
 
       const prompt = `You are an expert culinary guide specializing in South Korea's TV-featured and famous media-featured restaurants (e.g. 유명 방송 맛집 from shows/creators like 풍자 또간집, 백종원의 3대천왕, 전현무계획, 쯔양, 남겨서뭐하니, 성시경의 먹을텐데, 생활의 달인, 흑백요리사, 수요미식회, 식객 허영만의 백반기행, 맛있는 녀석들, 줄 서는 식당, 생생정보통, 놀라운 토요일, 최자로드, 유 퀴즈 온 더 블럭, 전지적 참견 시점, 백종원의 골목식당, 신상출시 편스토랑, 토요일은 밥이 좋아, 오늘 뭐 먹지?, 어쩌다 사장, 한국인의 밥상, 한끼줍쇼, 밥블레스유, 테이스티 로드, 홍석천 이원일, VJ특공대, 김사원세끼, 김영철의 동네 한 바퀴, 식신로드, 나 혼자 산다).
@@ -651,6 +834,11 @@ The result must be a JSON array. Each object in the array must strictly match th
 - rating: Double (between 1.0 and 5.0, representing real user sentiment)
 - featuredReason: Korean summary of why it's famous.`;
 
+      let finalPrompt = prompt;
+      if (favoriteStyle && favoriteStyle.trim()) {
+        finalPrompt += `\n\n- User Preference Style constraint: Pay special attention to search suggestions that match the user's preferred culinary style, flavor profile, or atmosphere stated as: "${favoriteStyle}". For example, if they like '매운 대접' or '한식 노포', search for matches fitting that criteria.`;
+      }
+
       const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
       const response = await fetch(url, {
         method: "POST",
@@ -659,7 +847,7 @@ The result must be a JSON array. Each object in the array must strictly match th
         },
         body: JSON.stringify({
           contents: [{
-            parts: [{ text: prompt }]
+            parts: [{ text: finalPrompt }]
           }],
           generationConfig: {
             responseMimeType: "application/json",
@@ -726,6 +914,13 @@ The result must be a JSON array. Each object in the array must strictly match th
       if (savedKey && !payload.geminiApiKey) {
         payload.geminiApiKey = savedKey;
       }
+
+      // Attach style preference
+      const styleInput = document.getElementById("style-preference-input");
+      if (styleInput && !payload.favoriteStyle) {
+        payload.favoriteStyle = styleInput.value.trim();
+        localStorage.setItem("TV_RESTAURANTS_FAV_STYLE", styleInput.value.trim());
+      }
       
       const statusText = document.getElementById("status-message");
       if (payload.latitude && payload.longitude) {
@@ -788,7 +983,7 @@ The result must be a JSON array. Each object in the array must strictly match th
         if (payload.geminiApiKey) {
           isGeminiActive = true;
           try {
-            const geminiFound = await searchRestaurantsWithGeminiClientSide(targetLat, targetLng, locationName, payload.geminiApiKey);
+            const geminiFound = await searchRestaurantsWithGeminiClientSide(targetLat, targetLng, locationName, payload.geminiApiKey, payload.favoriteStyle);
             if (geminiFound && geminiFound.length > 0) {
               const localNames = new Set(localList.map(r => r.name.replace(/\s+/g, "")));
               const uniqueGemini = geminiFound.filter(r => {
@@ -821,9 +1016,74 @@ The result must be a JSON array. Each object in the array must strictly match th
       }
 
       try {
-        allFetchedRestaurants = data.restaurants || [];
+        let rawList = data.restaurants || [];
         centerLat = parseFloat(data.centerLat);
         centerLng = parseFloat(data.centerLng);
+
+        // 1. Load active accumulated discoveries from localStorage and check deleted ones
+        const accumList = getAccumulatedRestaurants();
+        const deletedIds = getDeletedRestaurantIds();
+        
+        // 2. Filter accumulated discoveries within 2.0 km of the current search center
+        const accumWithinRadius = accumList.filter(r => {
+          if (deletedIds.has(r.id)) return false;
+          return getDistance(centerLat, centerLng, r.latitude, r.longitude) <= 2.0;
+        });
+
+        // 3. Keep track of edited/corrected versions from storage to override preloaded ones
+        const correctedMap = new Map();
+        accumList.forEach(r => {
+          if (!r.id.startsWith("gemini_")) {
+            correctedMap.set(r.id, r);
+          }
+        });
+
+        let mergedList = [];
+        const seenNames = new Set();
+
+        // 4. Process incoming fetched rawList (can be preloaded or search results)
+        rawList.forEach(r => {
+          if (deletedIds.has(r.id)) return;
+          
+          let item = r;
+          if (correctedMap.has(r.id)) {
+            item = correctedMap.get(r.id); // Use the corrected version!
+          }
+          
+          const cleanName = item.name.replace(/\s+/g, "");
+          seenNames.add(cleanName);
+          mergedList.push(item);
+        });
+
+        // 5. Append unique accumulated discoveries that are within distance but not in mergedList yet
+        accumWithinRadius.forEach(r => {
+          const cleanName = r.name.replace(/\s+/g, "");
+          if (!seenNames.has(cleanName)) {
+            seenNames.add(cleanName);
+            mergedList.push(r);
+          }
+        });
+
+        // 6. Automatically save any newly discovered/fetched Gemini restaurants to our localStorage accumulation
+        const currentAccum = getAccumulatedRestaurants();
+        let anyNewAccum = false;
+        
+        mergedList.forEach(r => {
+          if (r.id.startsWith("gemini_") || r.isGemini) {
+            r.isGemini = true; // flag it
+            const exists = currentAccum.some(item => item.id === r.id || item.name.replace(/\s+/g, "") === r.name.replace(/\s+/g, ""));
+            if (!exists) {
+              currentAccum.push(r);
+              anyNewAccum = true;
+            }
+          }
+        });
+        
+        if (anyNewAccum) {
+          saveAccumulatedRestaurants(currentAccum);
+        }
+
+        allFetchedRestaurants = mergedList;
         
         // Gemini Warning is suppressed based on user preference
         if (data.geminiError) {
@@ -831,7 +1091,9 @@ The result must be a JSON array. Each object in the array must strictly match th
         }
         
         // Update Title
-        document.getElementById("current-location-text").textContent = data.locationName || "서울 맛집";
+        const activeLocName = data.locationName || "서울 맛집";
+        document.getElementById("current-location-text").textContent = activeLocName;
+        addSearchHistory(activeLocName, centerLat, centerLng);
         
         // Update dynamic map center if loaded already
         if (appMapInstance) {
@@ -1113,11 +1375,15 @@ The result must be a JSON array. Each object in the array must strictly match th
 
         let detailSection = "";
         if (isSelected) {
+          const contactInfoHtml = r.tel ? `<p class="text-[11px] text-slate-500 flex items-center gap-1 font-semibold pt-0.5"><i data-lucide="phone" class="w-2.5 h-2.5 text-slate-400"></i> 연락처: ${r.tel}</p>` : "";
           detailSection = `
-            <div class="border-t border-slate-100 pt-3 mt-1 space-y-2.5 text-xs text-slate-600 animate-fadeIn">
-              <p class="leading-relaxed bg-rose-50/15 p-2.5 rounded-lg border border-rose-100/30 text-slate-700 antialiased">
-                ${r.description}
-              </p>
+            <div class="border-t border-slate-100 pt-3 mt-1 space-y-2.5 text-xs text-slate-600 animate-fadeIn" onclick="event.stopPropagation();">
+              <div class="space-y-1">
+                <p class="leading-relaxed bg-rose-50/[0.08] p-2.5 rounded-lg border border-slate-100 text-slate-700 antialiased">
+                  ${r.description}
+                </p>
+                ${contactInfoHtml}
+              </div>
 
               <!-- Map redirects to guarantee real matches -->
               <div class="grid grid-cols-2 gap-2 pt-1">
@@ -1125,7 +1391,7 @@ The result must be a JSON array. Each object in the array must strictly match th
                   href="https://map.naver.com/v5/search/${encodeURIComponent(searchKeywordStr)}"
                   target="_blank"
                   referrerpolicy="no-referrer"
-                  class="bg-[#03C75A] hover:bg-[#02b351] font-bold text-[11px] text-white py-1.5 px-3 rounded-lg flex items-center justify-center gap-1 text-center transition-transform"
+                  class="bg-[#03C75A] hover:bg-[#02b351] font-bold text-[11px] text-white py-1.5 px-3 rounded-lg flex items-center justify-center gap-1 text-center transition-transform cursor-pointer"
                 >
                   <span>네이버 지도 검색</span>
                   <i data-lucide="external-link" class="w-3 h-3"></i>
@@ -1134,11 +1400,66 @@ The result must be a JSON array. Each object in the array must strictly match th
                   href="https://map.kakao.com/?q=${encodeURIComponent(searchKeywordStr)}"
                   target="_blank"
                   referrerpolicy="no-referrer"
-                  class="bg-[#FEE500] hover:bg-[#ebd300] font-bold text-[11px] text-slate-900 py-1.5 px-3 rounded-lg flex items-center justify-center gap-1 text-center transition-transform"
+                  class="bg-[#FEE500] hover:bg-[#ebd300] font-bold text-[11px] text-slate-900 py-1.5 px-3 rounded-lg flex items-center justify-center gap-1 text-center transition-transform cursor-pointer"
                 >
                   <span>카카오 맵 검색</span>
                   <i data-lucide="external-link" class="w-3 h-3"></i>
                 </a>
+              </div>
+
+              <!-- Correction Section -->
+              <div class="border-t border-slate-100 pt-2.5 mt-2.5">
+                <div id="correction-trigger-${r.id}" class="flex items-center justify-between">
+                  <span class="text-[10px] text-slate-400 font-bold">오기 정보나 최신 정보 변경이 있나요?</span>
+                  <button
+                    onclick="event.stopPropagation(); toggleCorrectionForm('${r.id}')"
+                    type="button"
+                    class="text-[10px] text-violet-600 hover:text-violet-750 font-extrabold flex items-center gap-0.5 cursor-pointer bg-violet-50 px-1.5 py-0.5 rounded transition-all border border-violet-100 hover:border-violet-200"
+                  >
+                    <i data-lucide="sparkles" class="w-2.5 h-2.5 text-violet-500 animate-pulse"></i> AI 오배치 수정 지시
+                  </button>
+                </div>
+                <div id="correction-form-${r.id}" style="display:none;" class="mt-2 p-2.5 rounded-lg bg-violet-50/50 border border-violet-100/85 space-y-2 animate-fadeIn" onclick="event.stopPropagation();">
+                  <p class="text-[9px] text-violet-600 font-extrabold flex items-center gap-0.5">
+                    <i data-lucide="edit-3" class="w-3 h-3"></i> AI 실시간 데이터 수정 교정기
+                  </p>
+                  <p class="text-[9px] text-slate-500 leading-normal font-medium">
+                    메뉴 가격 변경, 주소 이전, 방송 정보 오류 등을 인공지능에게 알려주시면 실시간 수정본을 저장하고 즉시 화면에 반영합니다.
+                  </p>
+                  <div class="flex gap-1.5 pt-0.5">
+                    <input
+                      id="correction-input-${r.id}"
+                      type="text"
+                      placeholder="예: 대표메뉴 가격 오름 - 사케동(17,000원)"
+                      class="flex-1 px-2.5 py-1.5 border border-slate-200 focus:outline-none focus:ring-1 focus:ring-violet-400 focus:border-violet-500 text-[10px] rounded bg-white font-medium text-slate-800"
+                    />
+                    <button
+                      onclick="submitInfoCorrection('${r.id}')"
+                      id="correction-submit-btn-${r.id}"
+                      type="button"
+                      class="px-2.5 py-1.5 bg-violet-600 hover:bg-violet-700 font-bold text-[10px] text-white rounded transition-colors shadow-2xs whitespace-nowrap cursor-pointer hover:shadow-sm"
+                    >
+                      수정 지시
+                    </button>
+                  </div>
+                  <div id="correction-status-${r.id}" class="text-[9px] text-slate-500 pt-0.5 flex items-center gap-1" style="display:none;">
+                    <i data-lucide="refresh-cw" class="w-2.5 h-2.5 animate-spin text-violet-500"></i>
+                    <span id="correction-status-text-${r.id}">AI 분석 및 정보 가공 반영하는 중...</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Deletion Button Section -->
+              <div class="border-t border-slate-100 pt-2.5 flex justify-end">
+                <button
+                  onclick="event.stopPropagation(); deleteRestaurant('${r.id}')"
+                  type="button"
+                  class="text-[10px] border border-slate-200 hover:bg-rose-50 text-slate-500 hover:text-rose-600 font-bold py-1.5 px-2.5 rounded-lg flex items-center gap-1 transition-all cursor-pointer bg-white"
+                  title="이 식당을 발견 기록에서 영구적으로 제외하고 숨깁니다."
+                >
+                  <i data-lucide="trash-2" class="w-3 h-3 text-rose-500"></i>
+                  <span>이 식당 제거하기</span>
+                </button>
               </div>
             </div>
           `;
@@ -1152,6 +1473,22 @@ The result must be a JSON array. Each object in the array must strictly match th
           `;
         }
 
+        const favStyleVal = (document.getElementById("style-preference-input")?.value || "").trim().toLowerCase();
+        let isFavStyleMatch = false;
+        if (favStyleVal) {
+          const searchIn = `${r.name} ${r.category} ${r.tvShow} ${r.tvEpisode || ""} ${r.menu} ${r.description} ${r.featuredReason}`.toLowerCase();
+          const keywords = favStyleVal.split(/[\s,]+/).filter(k => k.length > 0);
+          isFavStyleMatch = keywords.some(kw => searchIn.includes(kw));
+        }
+
+        const favStyleBadgeHtml = isFavStyleMatch 
+          ? `
+            <span class="text-[9px] font-extrabold px-1.5 py-0.5 rounded-md bg-rose-500 text-white shadow-2xs shrink-0 flex items-center gap-0.5 animate-pulse">
+              <i data-lucide="heart" class="w-2.5 h-2.5 fill-white"></i> 취향 매칭
+            </span>
+          `
+          : "";
+
         card.innerHTML = `
           <!-- badge + distance info -->
           <div class="flex items-center justify-between gap-1">
@@ -1162,6 +1499,7 @@ The result must be a JSON array. Each object in the array must strictly match th
               <span class="text-[9px] bg-slate-100 text-slate-500 font-bold px-1.5 py-0.5 rounded border border-slate-200 truncate leading-none">
                 ${r.tvEpisode || "TV방영 정보"}
               </span>
+              ${favStyleBadgeHtml}
             </div>
             <span class="text-[10px] font-bold text-slate-400 font-mono flex items-center gap-0.5 shrink-0">
               <i data-lucide="map-pin" class="w-2.5 h-2.5 text-rose-400"></i>
@@ -1229,6 +1567,157 @@ The result must be a JSON array. Each object in the array must strictly match th
         }
       }
     }
+
+    // --- Dynamic Mutation Features: Delete & AI Info Correction ---
+    window.deleteRestaurant = function(id) {
+      if (!confirm("정말 이 식당을 목록에서 제거하여 보이지 않게 감추시겠습니까?")) return;
+      
+      const deleted = getDeletedRestaurantIds();
+      deleted.add(id);
+      saveDeletedRestaurantIds(deleted);
+
+      // Filter out immediately
+      allFetchedRestaurants = allFetchedRestaurants.filter(r => r.id !== id);
+      if (selectedRestaurantId === id) {
+        selectedRestaurantId = allFetchedRestaurants.length > 0 ? allFetchedRestaurants[0].id : null;
+      }
+
+      alert("목록에서 정상적으로 숨김 처리되었습니다.");
+      rebuildFilterCheckboxes();
+      renderRestaurantList();
+    };
+
+    window.toggleCorrectionForm = function(id) {
+      const form = document.getElementById(`correction-form-${id}`);
+      if (form) {
+        form.style.display = form.style.display === "none" ? "block" : "none";
+      }
+    };
+
+    window.submitInfoCorrection = async function(id) {
+      const inputEl = document.getElementById(`correction-input-${id}`);
+      const statusEl = document.getElementById(`correction-status-${id}`);
+      const btnEl = document.getElementById(`correction-submit-btn-${id}`);
+      
+      const correctionText = (inputEl?.value || "").trim();
+      if (!correctionText) {
+        alert("수정할 내용을 구체적으로 작성해 주십시오.");
+        return;
+      }
+
+      if (statusEl) statusEl.style.display = "flex";
+      if (btnEl) {
+        btnEl.disabled = true;
+        btnEl.classList.add("opacity-50");
+      }
+
+      try {
+        const r = allFetchedRestaurants.find(item => item.id === id);
+        if (!r) throw new Error("해당 식당 데이터를 읽을 수 없습니다.");
+
+        const apiKey = localStorage.getItem("gemini_api_key");
+        let updatedItem = null;
+
+        // Try server endpoint
+        try {
+          const response = await fetch("/api/correct", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              restaurant: r,
+              correction: correctionText,
+              geminiApiKey: apiKey
+            })
+          });
+
+          if (response.ok) {
+            const resData = await response.json();
+            updatedItem = resData.restaurant;
+          }
+        } catch (srvErr) {
+          console.warn("Server correction API unavailable, trying client direct pipeline:", srvErr);
+        }
+
+        // Client fallback with custom user key
+        if (!updatedItem && apiKey) {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+          const prompt = `You are an expert GIS data editor.
+Convert the following Korean TV-featured restaurant object to incorporate specific corrections:
+Original details:
+${JSON.stringify(r)}
+
+Specific Correction stated by user:
+"${correctionText}"
+
+Task:
+Recreate the exact same restaurant object structure, but update the fields (such as 'name', 'category', 'tvShow', 'tvEpisode', 'menu', 'address', 'latitude', 'longitude', 'description', 'tel', 'rating', 'featuredReason') accurately based on the correction instructions.
+Return ONLY valid JSON format matching this schema. Avoid any extra text context.`;
+
+          const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: { responseMimeType: "application/json" }
+            })
+          });
+
+          if (response.ok) {
+            const dData = await response.json();
+            let cText = dData?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (cText) {
+              cText = cText.trim();
+              if (cText.startsWith("```")) {
+                cText = cText.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+              }
+              updatedItem = JSON.parse(cText);
+            }
+          }
+        }
+
+        // Local static rule fallback if both server and client fetch failed (e.g. Rate limits / no key available)
+        if (!updatedItem) {
+          if (!apiKey) {
+            alert("⚠️ AI API 키가 비어있어, 서버/클라이언트 즉각 지능 교정이 제한됩니다. 우측 상단의 ⚙️ 설정 아이콘에서 무료 API 키를 저장하시면 전문 AI가 맞춤 수정해 드립니다!\n\n(안내: 지금은 임시 수동 필드 매칭 기능으로 우선 보완하여 저장합니다.)");
+          }
+          const localCopy = { ...r };
+          if (correctionText.includes("메뉴") || correctionText.includes("가격") || correctionText.includes("원")) {
+            localCopy.menu = correctionText;
+          } else if (correctionText.includes("전화")) {
+            localCopy.tel = correctionText.replace(/전화번호|전화|번호/gi, "").trim();
+          } else if (correctionText.includes("이름") || correctionText.includes("상호")) {
+            localCopy.name = correctionText.replace(/이름|상호|명칭/gi, "").trim();
+          } else {
+            localCopy.description = `${r.description} (수정 건의: ${correctionText})`;
+          }
+          updatedItem = localCopy;
+        }
+
+        if (updatedItem) {
+          const accum = getAccumulatedRestaurants();
+          const cleanAccum = accum.filter(item => item.id !== id);
+          cleanAccum.push(updatedItem);
+          saveAccumulatedRestaurants(cleanAccum);
+
+          allFetchedRestaurants = allFetchedRestaurants.map(item => item.id === id ? updatedItem : item);
+          
+          alert(`✨ 맛집 '${updatedItem.name}' 정보 교정이 무사히 AI 지능형 수기 저널에 저장축적되었습니다!`);
+          renderRestaurantList();
+        } else {
+          throw new Error("수정 가공 처리에 아쉬운 에러가 발생했습니다.");
+        }
+
+      } catch (err) {
+        console.error("Info Correction Failed:", err);
+        alert("오류 정정 중 안내: " + err.message);
+      } finally {
+        if (statusEl) statusEl.style.display = "none";
+        if (btnEl) {
+          btnEl.disabled = false;
+          btnEl.classList.remove("opacity-50");
+        }
+      }
+    };
 
     // --- Address suggestion autocomplete via Nominatim ---
     let suggestionDebounceTimer = null;
@@ -1550,12 +2039,51 @@ The result must be a JSON array. Each object in the array must strictly match th
 
     // --- Initial Bootloader logic ---
     window.addEventListener("DOMContentLoaded", async () => {
+      // 1. Populate saved favorite style
+      const savedFavStyle = localStorage.getItem("TV_RESTAURANTS_FAV_STYLE");
+      if (savedFavStyle) {
+        const styleInput = document.getElementById("style-preference-input");
+        if (styleInput) styleInput.value = savedFavStyle;
+      }
+
+      // 2. Render previous search history
+      window.renderSearchHistory();
+
       lucide.createIcons();
       initLeafletMap();
       updateGeminiUIState();
 
-      // Perform default Mangwon query on startup
-      await fetchServerRestaurants({ query: "서울 마포구 망원동" });
+      // 3. Try to locate with browser GPS on start, fallback to Mangwon if it fails or gets rejected
+      if (navigator.geolocation) {
+        // Show immediate loading feedback
+        const overlay = document.getElementById("loading-overlay");
+        if (overlay) overlay.style.display = "flex";
+        const statusMsg = document.getElementById("status-message");
+        if (statusMsg) statusMsg.textContent = "첫 접속: 내 근처의 실시간 방송 맛집 조회를 위해 기기 GPS 센서 좌표 정보를 연동 중입니다...";
+
+        navigator.geolocation.getCurrentPosition(
+          async (pos) => {
+            const lat = pos.coords.latitude;
+            const lon = pos.coords.longitude;
+            const badge = document.getElementById("gps-active-badge");
+            if (badge) badge.style.display = "inline-block";
+            
+            await fetchServerRestaurants({
+              latitude: lat,
+              longitude: lon
+            });
+          },
+          async (err) => {
+            console.warn("Initial GPS acquisition failed, falling back to default Mangwon:", err);
+            const badge = document.getElementById("gps-active-badge");
+            if (badge) badge.style.display = "none";
+            await fetchServerRestaurants({ query: "서울 마포구 망원동" });
+          },
+          { enableHighAccuracy: true, timeout: 5000 }
+        );
+      } else {
+        await fetchServerRestaurants({ query: "서울 마포구 망원동" });
+      }
     });
   </script>
 </body>

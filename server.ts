@@ -35,7 +35,8 @@ async function searchRestaurantsWithGemini(
   lat: number,
   lng: number,
   locationName: string,
-  userApiKey?: string
+  userApiKey?: string,
+  favoriteStyle?: string
 ): Promise<any[]> {
   const apiKey = userApiKey || process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -43,8 +44,8 @@ async function searchRestaurantsWithGemini(
     return [];
   }
 
-  // Key by coordinate rounded to 3 decimal places (~110 meters) to cover pans/slight movements
-  const cacheKey = `${lat.toFixed(3)},${lng.toFixed(3)}`;
+  // Key by coordinate rounded to 3 decimal places (~110 meters) to cover pans/slight movements + style preference
+  const cacheKey = `${lat.toFixed(3)},${lng.toFixed(3)}_${favoriteStyle || ""}`;
   const cached = geminiSearchCache.get(cacheKey);
   if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
     console.log(`[Cache Hit] Returning cached Gemini results for coord ${cacheKey} (${locationName})`);
@@ -60,12 +61,17 @@ async function searchRestaurantsWithGemini(
     }
   });
 
+  let styleAddition = "";
+  if (favoriteStyle && favoriteStyle.trim()) {
+    styleAddition = `\n- Preference constraint: Find restaurants that strongly match the user's favorite food/flavor style preference, listed as: "${favoriteStyle}". For example, if they like '매운 대접' or '한식 노포', search for matches fitting that criteria.`;
+  }
+
   const prompt = `You are an expert culinary guide specializing in South Korea's TV-featured and famous media-featured restaurants (e.g. 유명 방송 맛집 from shows/creators like 풍자 또간집, 백종원의 3대천왕, 전현무계획, 쯔양, 남겨서뭐하니, 성시경의 먹을텐데, 생활의 달인, 흑백요리사, 수요미식회, 식객 허영만의 백반기행, 맛있는 녀석들, 줄 서는 식당, 생생정보통, 놀라운 토요일, 최자로드, 유 퀴즈 온 더 블럭, 전지적 참견 시점, 백종원의 골목식당, 신상출시 편스토랑, 토요일은 밥이 좋아, 오늘 뭐 먹지?, 어쩌다 사장, 한국인의 밥상, 한끼줍쇼, 밥블레스유, 테이스티 로드, 홍석천 이원일, VJ특공대, 김사원세끼, 김영철의 동네 한 바퀴, 식신로드, 나 혼자 산다).
 
 Find real, officially featured restaurants in Korea that correspond to the following search profile:
 - Search Center point: ${locationName}
 - Coordinates: Latitude ${lat}, Longitude ${lng}
-- Distance constraint: Strictly within a 2.0 km radius of this center coordinate.
+- Distance constraint: Strictly within a 2.0 km radius of this center coordinate.${styleAddition}
 
 Strict Rules of Integrity:
 1. Search thoroughly across ALL SEASONS and year ranges of the TV shows listed above (e.g. '전현무계획 시즌1', '전현무계획 시즌2', '줄 서는 식당 2', '식신로드 시즌1/시즌2/시즌3/시즌4', '테이스티 로드 전 시즌', '어쩌다 사장 1/2/3', '밥블레스유 2020', '맛있는 녀석들' different eras, etc.).
@@ -180,7 +186,7 @@ async function startServer() {
   // API Route to fetch TV restaurants
   app.post("/api/restaurants", async (req, res) => {
     console.log("Received local restaurant search request:", req.body);
-    const { query, latitude, longitude, geminiApiKey } = req.body;
+    const { query, latitude, longitude, geminiApiKey, favoriteStyle } = req.body;
 
     try {
       let targetLat = latitude ? parseFloat(latitude) : null;
@@ -230,9 +236,9 @@ async function startServer() {
 
       if (finalApiKey) {
         isGeminiActive = true;
-        console.log("Triggering dynamic Gemini API search block...");
+        console.log("Triggering dynamic Gemini API search block with style:", favoriteStyle);
         try {
-          const geminiFound = await searchRestaurantsWithGemini(targetLat, targetLng, locationName, finalApiKey);
+          const geminiFound = await searchRestaurantsWithGemini(targetLat, targetLng, locationName, finalApiKey, favoriteStyle);
           
           if (geminiFound && geminiFound.length > 0) {
             const localNames = new Set(localList.map(r => r.name.replace(/\s+/g, "")));
@@ -283,6 +289,80 @@ async function startServer() {
         restaurants: matchedFallback,
         isGeminiActive: false
       });
+    }
+  });
+
+  // API Route to correct restaurant info using AI
+  app.post("/api/correct", async (req, res) => {
+    console.log("Received AI correction request:", req.body?.restaurant?.name);
+    const { restaurant, correction, geminiApiKey } = req.body;
+    const apiKey = geminiApiKey || process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      return res.status(400).json({ error: "Gemini API key is required to correct information using AI." });
+    }
+
+    try {
+      const ai = new GoogleGenAI({
+        apiKey: apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+
+      const prompt = `You are a professional editor.
+We have the following restaurant data in South Korea:
+${JSON.stringify(restaurant, null, 2)}
+
+The user says that some of this information is incorrect and needs to be corrected:
+"${correction}"
+
+Task:
+Generate the updated restaurant object according to the exact same schema. Update any properties mentioned by the user (like name, category, tvShow, menu/prices, address, coordinates, description, tel, rating, featuredReason etc.) accurately based on their instruction.
+Ensure coordinates (latitude, longitude) are valid numbers. Keep all other unchanged properties completely identical to the input.
+Return ONLY a valid JSON object matching the schema. No explanations, no markdown blocks.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              id: { type: Type.STRING },
+              name: { type: Type.STRING },
+              category: { type: Type.STRING },
+              tvShow: { type: Type.STRING },
+              tvEpisode: { type: Type.STRING },
+              menu: { type: Type.STRING },
+              address: { type: Type.STRING },
+              latitude: { type: Type.NUMBER },
+              longitude: { type: Type.NUMBER },
+              description: { type: Type.STRING },
+              tel: { type: Type.STRING },
+              rating: { type: Type.NUMBER },
+              featuredReason: { type: Type.STRING },
+            },
+            required: [
+              "id", "name", "category", "tvShow", "menu", "address", "latitude", "longitude", "description", "rating", "featuredReason"
+            ]
+          }
+        }
+      });
+
+      const text = response.text;
+      if (text) {
+        const parsed = JSON.parse(text.trim());
+        return res.json({ status: "ok", restaurant: parsed });
+      } else {
+        throw new Error("No response text from Gemini API");
+      }
+    } catch (error: any) {
+      console.error("AI Correction failed:", error);
+      res.status(500).json({ error: error?.message || "AI correction request failed." });
     }
   });
 
